@@ -3,18 +3,17 @@ import mediapipe as mp
 import time
 from pathlib import Path
 
+# Importación de las funciones de la Actividad A3
+from pupil_segmentation import preprocess_eye_roi, segment_pupil
 
-# ============================================================
+
 # CONFIGURACIÓN
-# ============================================================
 
 BASE_DIR = Path(__file__).resolve().parent
-MODEL_PATH = BASE_DIR / "models" / "face_landmarker.task"
+MODEL_PATH = (BASE_DIR / "models" / "face_landmarker.task").resolve()
 
 
-# ============================================================
 # LANDMARKS DE REGIONES FACIALES
-# ============================================================
 
 # Ojo izquierdo anatómico de la persona
 LEFT_EYE = [
@@ -47,30 +46,21 @@ MOUTH = [
 ]
 
 
-# ============================================================
 # FUNCIONES AUXILIARES
-# ============================================================
 
 def obtener_puntos(landmarks, indices, ancho, alto):
     """
     Convierte landmarks normalizados de MediaPipe
     a coordenadas reales en píxeles.
     """
-
     puntos = []
-
     for indice in indices:
-
         if indice >= len(landmarks):
             continue
-
         landmark = landmarks[indice]
-
         x = int(landmark.x * ancho)
         y = int(landmark.y * alto)
-
         puntos.append((x, y))
-
     return puntos
 
 
@@ -78,50 +68,28 @@ def dibujar_puntos(frame, puntos, color, radio=2):
     """
     Dibuja una lista de puntos sobre el frame.
     """
-
     for punto in puntos:
-        cv2.circle(
-            frame,
-            punto,
-            radio,
-            color,
-            -1
-        )
+        cv2.circle(frame, punto, radio, color, -1)
 
 
 def dibujar_contorno(frame, puntos, color):
     """
     Une visualmente los puntos de una región facial.
     """
-
     if len(puntos) < 2:
         return
 
     for i in range(len(puntos) - 1):
-        cv2.line(
-            frame,
-            puntos[i],
-            puntos[i + 1],
-            color,
-            1
-        )
+        cv2.line(frame, puntos[i], puntos[i + 1], color, 1)
 
     # Cerrar el contorno
-    cv2.line(
-        frame,
-        puntos[-1],
-        puntos[0],
-        color,
-        1
-    )
+    cv2.line(frame, puntos[-1], puntos[0], color, 1)
 
 
 def obtener_roi(frame_limpio, puntos, margen=10):
     """
-    Obtiene un recorte rectangular alrededor
-    de una región facial.
+    Obtiene un recorte rectangular alrededor de una región facial.
     """
-
     if not puntos:
         return None, None
 
@@ -146,19 +114,12 @@ def dibujar_caja(frame, caja, color, texto):
     """
     Dibuja un bounding box con una etiqueta.
     """
-
     if caja is None:
         return
 
     x1, y1, x2, y2 = caja
 
-    cv2.rectangle(
-        frame,
-        (x1, y1),
-        (x2, y2),
-        color,
-        1
-    )
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 1)
 
     cv2.putText(
         frame,
@@ -171,33 +132,22 @@ def dibujar_caja(frame, caja, color, texto):
     )
 
 
-# ============================================================
-# PROGRAMA PRINCIPAL
-# ============================================================
 
+# PROGRAMA PRINCIPAL
 def main():
 
-    # --------------------------------------------------------
+
     # Verificar modelo
     # --------------------------------------------------------
-
     if not MODEL_PATH.exists():
-
         print("[ERROR] No se encontró el modelo:")
         print(MODEL_PATH)
-
-        print(
-            "\nDescarga face_landmarker.task "
-            "dentro de la carpeta models/."
-        )
-
+        print("\nDescarga face_landmarker.task dentro de la carpeta models/.")
         return
 
 
-    # --------------------------------------------------------
     # Inicializar cámara
     # --------------------------------------------------------
-
     cap = cv2.VideoCapture(0)
 
     if not cap.isOpened():
@@ -205,42 +155,21 @@ def main():
         return
 
 
-    # --------------------------------------------------------
     # Configurar MediaPipe Tasks
     # --------------------------------------------------------
-
     BaseOptions = mp.tasks.BaseOptions
-
-    FaceLandmarker = (
-        mp.tasks.vision.FaceLandmarker
-    )
-
-    FaceLandmarkerOptions = (
-        mp.tasks.vision.FaceLandmarkerOptions
-    )
-
-    RunningMode = (
-        mp.tasks.vision.RunningMode
-    )
-
+    FaceLandmarker = mp.tasks.vision.FaceLandmarker
+    FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
+    RunningMode = mp.tasks.vision.RunningMode
 
     options = FaceLandmarkerOptions(
-
-        base_options=BaseOptions(
-            model_asset_path=str(MODEL_PATH)
-        ),
-
+        base_options=BaseOptions(model_asset_path=str(MODEL_PATH)),
         running_mode=RunningMode.VIDEO,
-
         num_faces=1,
-
         min_face_detection_confidence=0.5,
-
         min_face_presence_confidence=0.5,
-
         min_tracking_confidence=0.5
     )
-
 
     print("[OK] Cámara iniciada correctamente.")
     print("[OK] MediaPipe Face Landmarker iniciado.")
@@ -251,21 +180,15 @@ def main():
     print()
 
 
-    # --------------------------------------------------------
     # Variables FPS
     # --------------------------------------------------------
-
     tiempo_anterior = time.time()
-
     fps_suavizado = 0.0
-
     ultimo_timestamp = 0
 
 
-    # --------------------------------------------------------
     # Crear Face Landmarker
     # --------------------------------------------------------
-
     with FaceLandmarker.create_from_options(options) as landmarker:
 
         while True:
@@ -276,77 +199,36 @@ def main():
                 print("[ERROR] No se pudo obtener un frame.")
                 break
 
-
-            # ------------------------------------------------
             # Modo espejo
-            # ------------------------------------------------
-
             frame = cv2.flip(frame, 1)
 
-
-            # IMPORTANTE:
-            # Guardamos una copia sin dibujos.
-            # Los ROI se extraerán desde esta imagen.
             frame_limpio = frame.copy()
-
-
             alto, ancho = frame.shape[:2]
 
+            frame_rgb = cv2.cvtColor(frame_limpio, cv2.COLOR_BGR2RGB)
 
-            # ------------------------------------------------
-            # Convertir BGR -> RGB
-            # ------------------------------------------------
-
-            frame_rgb = cv2.cvtColor(
-                frame_limpio,
-                cv2.COLOR_BGR2RGB
-            )
-
-
-            # ------------------------------------------------
             # Crear imagen MediaPipe
-            # ------------------------------------------------
-
             mp_image = mp.Image(
                 image_format=mp.ImageFormat.SRGB,
                 data=frame_rgb
             )
 
-
-            # ------------------------------------------------
-            # Timestamp obligatorio en modo VIDEO
-            # ------------------------------------------------
-
-            timestamp_ms = int(
-                time.monotonic() * 1000
-            )
-
+            # Timestamp para modo VIDEO
+            timestamp_ms = int(time.monotonic() * 1000)
             if timestamp_ms <= ultimo_timestamp:
                 timestamp_ms = ultimo_timestamp + 1
-
             ultimo_timestamp = timestamp_ms
 
-
-            # ------------------------------------------------
             # Detectar rostro
-            # ------------------------------------------------
-
-            resultado = landmarker.detect_for_video(
-                mp_image,
-                timestamp_ms
-            )
-
+            resultado = landmarker.detect_for_video(mp_image, timestamp_ms)
 
             # Inicializamos ROI vacíos
             roi_ojo_izq = None
             roi_ojo_der = None
             roi_boca = None
 
-
-            # =================================================
+            
             # ROSTRO DETECTADO
-            # =================================================
-
             if resultado.face_landmarks:
 
                 cv2.putText(
@@ -359,203 +241,43 @@ def main():
                     2
                 )
 
-
-                # Solo trabajamos con una persona
                 landmarks = resultado.face_landmarks[0]
 
-
-                # ---------------------------------------------
-                # Dibujar TODOS los landmarks
-                # ---------------------------------------------
-
+                # Dibujar todos los landmarks
                 for landmark in landmarks:
+                    x = int(landmark.x * ancho)
+                    y = int(landmark.y * alto)
+                    cv2.circle(frame, (x, y), 1, (0, 255, 0), -1)
 
-                    x = int(
-                        landmark.x * ancho
-                    )
-
-                    y = int(
-                        landmark.y * alto
-                    )
-
-                    cv2.circle(
-                        frame,
-                        (x, y),
-                        1,
-                        (0, 255, 0),
-                        -1
-                    )
-
-
-                # ---------------------------------------------
                 # Obtener regiones faciales
-                # ---------------------------------------------
+                ojo_izquierdo = obtener_puntos(landmarks, LEFT_EYE, ancho, alto)
+                ojo_derecho = obtener_puntos(landmarks, RIGHT_EYE, ancho, alto)
+                iris_izquierdo = obtener_puntos(landmarks, LEFT_IRIS, ancho, alto)
+                iris_derecho = obtener_puntos(landmarks, RIGHT_IRIS, ancho, alto)
+                boca = obtener_puntos(landmarks, MOUTH, ancho, alto)
 
-                ojo_izquierdo = obtener_puntos(
-                    landmarks,
-                    LEFT_EYE,
-                    ancho,
-                    alto
-                )
+                # Dibujar puntos y contornos
+                dibujar_puntos(frame, ojo_izquierdo, (255, 0, 0), 2)
+                dibujar_puntos(frame, ojo_derecho, (255, 0, 0), 2)
+                dibujar_puntos(frame, iris_izquierdo, (0, 255, 255), 3)
+                dibujar_puntos(frame, iris_derecho, (0, 255, 255), 3)
+                dibujar_puntos(frame, boca, (255, 0, 255), 2)
 
-                ojo_derecho = obtener_puntos(
-                    landmarks,
-                    RIGHT_EYE,
-                    ancho,
-                    alto
-                )
+                dibujar_contorno(frame, ojo_izquierdo, (255, 0, 0))
+                dibujar_contorno(frame, ojo_derecho, (255, 0, 0))
+                dibujar_contorno(frame, iris_izquierdo, (0, 255, 255))
+                dibujar_contorno(frame, iris_derecho, (0, 255, 255))
+                dibujar_contorno(frame, boca, (255, 0, 255))
 
-                iris_izquierdo = obtener_puntos(
-                    landmarks,
-                    LEFT_IRIS,
-                    ancho,
-                    alto
-                )
+                # Extraer ROI limpios
+                roi_ojo_izq, box_ojo_izq = obtener_roi(frame_limpio, ojo_izquierdo, margen=15)
+                roi_ojo_der, box_ojo_der = obtener_roi(frame_limpio, ojo_derecho, margen=15)
+                roi_boca, box_boca = obtener_roi(frame_limpio, boca, margen=15)
 
-                iris_derecho = obtener_puntos(
-                    landmarks,
-                    RIGHT_IRIS,
-                    ancho,
-                    alto
-                )
-
-                boca = obtener_puntos(
-                    landmarks,
-                    MOUTH,
-                    ancho,
-                    alto
-                )
-
-
-                # ---------------------------------------------
-                # Dibujar regiones diferenciadas
-                # ---------------------------------------------
-
-                # Ojos
-                dibujar_puntos(
-                    frame,
-                    ojo_izquierdo,
-                    (255, 0, 0),
-                    2
-                )
-
-                dibujar_puntos(
-                    frame,
-                    ojo_derecho,
-                    (255, 0, 0),
-                    2
-                )
-
-
-                # Iris
-                dibujar_puntos(
-                    frame,
-                    iris_izquierdo,
-                    (0, 255, 255),
-                    3
-                )
-
-                dibujar_puntos(
-                    frame,
-                    iris_derecho,
-                    (0, 255, 255),
-                    3
-                )
-
-
-                # Boca
-                dibujar_puntos(
-                    frame,
-                    boca,
-                    (255, 0, 255),
-                    2
-                )
-
-
-                # Dibujar contornos
-                dibujar_contorno(
-                    frame,
-                    ojo_izquierdo,
-                    (255, 0, 0)
-                )
-
-                dibujar_contorno(
-                    frame,
-                    ojo_derecho,
-                    (255, 0, 0)
-                )
-
-                dibujar_contorno(
-                    frame,
-                    iris_izquierdo,
-                    (0, 255, 255)
-                )
-
-                dibujar_contorno(
-                    frame,
-                    iris_derecho,
-                    (0, 255, 255)
-                )
-
-                dibujar_contorno(
-                    frame,
-                    boca,
-                    (255, 0, 255)
-                )
-
-
-                # ---------------------------------------------
-                # Extraer ROI desde el FRAME LIMPIO
-                # ---------------------------------------------
-
-                roi_ojo_izq, box_ojo_izq = obtener_roi(
-                    frame_limpio,
-                    ojo_izquierdo,
-                    margen=15
-                )
-
-                roi_ojo_der, box_ojo_der = obtener_roi(
-                    frame_limpio,
-                    ojo_derecho,
-                    margen=15
-                )
-
-                roi_boca, box_boca = obtener_roi(
-                    frame_limpio,
-                    boca,
-                    margen=15
-                )
-
-
-                # ---------------------------------------------
                 # Dibujar bounding boxes
-                # ---------------------------------------------
-
-                dibujar_caja(
-                    frame,
-                    box_ojo_izq,
-                    (255, 0, 0),
-                    "Ojo izq."
-                )
-
-                dibujar_caja(
-                    frame,
-                    box_ojo_der,
-                    (255, 0, 0),
-                    "Ojo der."
-                )
-
-                dibujar_caja(
-                    frame,
-                    box_boca,
-                    (255, 0, 255),
-                    "Boca"
-                )
-
-
-                # ---------------------------------------------
-                # Mostrar cantidad de landmarks
-                # ---------------------------------------------
+                dibujar_caja(frame, box_ojo_izq, (255, 0, 0), "Ojo izq.")
+                dibujar_caja(frame, box_ojo_der, (255, 0, 0), "Ojo der.")
+                dibujar_caja(frame, box_boca, (255, 0, 255), "Boca")
 
                 cv2.putText(
                     frame,
@@ -567,13 +289,7 @@ def main():
                     1
                 )
 
-
-            # =================================================
-            # ROSTRO NO DETECTADO
-            # =================================================
-
             else:
-
                 cv2.putText(
                     frame,
                     "Rostro NO detectado",
@@ -584,35 +300,18 @@ def main():
                     2
                 )
 
-
-            # =================================================
+            
             # FPS
-            # =================================================
-
             tiempo_actual = time.time()
-
-            diferencia = (
-                tiempo_actual - tiempo_anterior
-            )
-
+            diferencia = tiempo_actual - tiempo_anterior
             tiempo_anterior = tiempo_actual
 
-
             if diferencia > 0:
-
                 fps_actual = 1.0 / diferencia
-
-                # Suavizado para que el valor
-                # no cambie de forma tan brusca
                 if fps_suavizado == 0:
                     fps_suavizado = fps_actual
-
                 else:
-                    fps_suavizado = (
-                        0.9 * fps_suavizado
-                        + 0.1 * fps_actual
-                    )
-
+                    fps_suavizado = 0.9 * fps_suavizado + 0.1 * fps_actual
 
             cv2.putText(
                 frame,
@@ -623,7 +322,6 @@ def main():
                 (255, 255, 255),
                 2
             )
-
 
             cv2.putText(
                 frame,
@@ -636,99 +334,53 @@ def main():
             )
 
 
-            # =================================================
             # MOSTRAR VENTANA PRINCIPAL
-            # =================================================
+            cv2.imshow("A2 - Landmarks faciales", frame)
 
-            cv2.imshow(
-                "A2 - Landmarks faciales",
-                frame
-            )
+            
+            # PROCESAMIENTO A3: SEGMENTACIÓN PUPILAR EN LOS ROI
+            # Ojo Izquierdo
+            if roi_ojo_izq is not None and roi_ojo_izq.size > 0:
+                # Preprocesamiento de baja resolución
+                _, preprocessed_izq = preprocess_eye_roi(roi_ojo_izq, scale_factor=3.0)
+                # Segmentación de la pupila
+                elipse_izq, _, res_pupila_izq = segment_pupil(preprocessed_izq)
 
+                if res_pupila_izq is not None:
+                    cv2.imshow("A3 - Pupila Ojo Izquierdo", res_pupila_izq)
 
-            # =================================================
-            # MOSTRAR ROI
-            # =================================================
+            # Ojo Derecho
+            if roi_ojo_der is not None and roi_ojo_der.size > 0:
+                # Preprocesamiento de baja resolución
+                _, preprocessed_der = preprocess_eye_roi(roi_ojo_der, scale_factor=3.0)
+                # Segmentación de la pupila
+                elipse_der, _, res_pupila_der = segment_pupil(preprocessed_der)
 
-            if (
-                roi_ojo_izq is not None
-                and roi_ojo_izq.size > 0
-            ):
+                if res_pupila_der is not None:
+                    cv2.imshow("A3 - Pupila Ojo Derecho", res_pupila_der)
 
-                cv2.imshow(
-                    "ROI - Ojo izquierdo",
-                    roi_ojo_izq
-                )
-
-
-            if (
-                roi_ojo_der is not None
-                and roi_ojo_der.size > 0
-            ):
-
-                cv2.imshow(
-                    "ROI - Ojo derecho",
-                    roi_ojo_der
-                )
+            # Boca
+            if roi_boca is not None and roi_boca.size > 0:
+                cv2.imshow("ROI - Boca", roi_boca)
 
 
-            if (
-                roi_boca is not None
-                and roi_boca.size > 0
-            ):
-
-                cv2.imshow(
-                    "ROI - Boca",
-                    roi_boca
-                )
-
-
-            # =================================================
             # TECLADO
-            # =================================================
-
             tecla = cv2.waitKey(1) & 0xFF
 
-
-            # Q -> salir
             if tecla == ord("q"):
                 break
 
-
-            # S -> guardar evidencia
             if tecla == ord("s"):
-
-                carpeta_evidencias = (
-                    BASE_DIR / "evidencias"
-                )
-
-                carpeta_evidencias.mkdir(
-                    exist_ok=True
-                )
-
-                nombre = (
-                    carpeta_evidencias
-                    / f"a2_{int(time.time())}.jpg"
-                )
-
-                cv2.imwrite(
-                    str(nombre),
-                    frame
-                )
-
-                print(
-                    f"[OK] Evidencia guardada: {nombre}"
-                )
+                carpeta_evidencias = BASE_DIR / "evidencias"
+                carpeta_evidencias.mkdir(exist_ok=True)
+                nombre = carpeta_evidencias / f"a3_{int(time.time())}.jpg"
+                cv2.imwrite(str(nombre), frame)
+                print(f"[OK] Evidencia guardada: {nombre}")
 
 
-    # ========================================================
     # CERRAR
-    # ========================================================
-
     cap.release()
-
     cv2.destroyAllWindows()
-
     print("[OK] Cámara cerrada correctamente.")
 
 
