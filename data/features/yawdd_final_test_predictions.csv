@@ -1,0 +1,13 @@
+subject_id,original_label,binary_label,prediction,video,baseline_mar,max_ratio,max_run_seconds,correct
+F11,normal,no_yawn,no_yawn,11-FemaleNoGlasses-Normal.avi,0.3655,2.126,0.801,True
+F12,normal,no_yawn,yawning,12-FemaleNoGlasses-Normal.avi,0.3816,2.236,4.638,False
+M17,normal,no_yawn,no_yawn,17-MaleNoGlasses-Normal.avi,0.2952,1.482,0.501,True
+M18,normal,no_yawn,no_yawn,18-MaleNoGlasses-Normal.avi,0.4196,1.416,1.201,True
+F11,talking,no_yawn,no_yawn,11-FemaleNoGlasses-Talking.avi,0.4132,2.308,1.869,True
+F12,talking,no_yawn,no_yawn,12-FemaleNoGlasses-Talking.avi,0.4283,1.906,0.701,True
+M17,talking,no_yawn,no_yawn,17-MaleNoGlasses-Talking.avi,0.3158,2.063,0.801,True
+M18,talking,no_yawn,no_yawn,18-MaleNoGlasses-Talking.avi,0.4702,1.453,0.534,True
+F11,yawning,yawning,yawning,11-FemaleNoGlasses-Yawning.avi,0.3331,6.339,3.77,True
+F12,yawning,yawning,yawning,12-FemaleNoGlasses-Yawning.avi,0.3699,3.366,7.374,True
+M17,yawning,yawning,yawning,17-MaleNoGlasses-Yawning.avi,0.3497,4.159,3.604,True
+M18,yawning,yawning,yawning,18-MaleNoGlasses-Yawning.avi,0.3734,3.147,5.405,True
