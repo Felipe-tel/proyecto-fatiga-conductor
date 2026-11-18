@@ -20,6 +20,7 @@ from head_pose import (
     dibujar_vector_pose,
     evaluar_estado_pose
 )
+from a4 import A4Monitor, landmarks_to_array, blendshapes_to_dict, pose_from_result
 
 
 # CONFIGURACIÓN
@@ -153,13 +154,31 @@ def main():
         default=None,
         help="Ruta al archivo de video (ej. UTA-RLDD). Si se omite, usa la webcam."
     )
+    parser.add_argument(
+        "--cam",
+        type=int,
+        default=0,
+        help="Índice de la cámara cuando no se usa --video (0 por defecto; prueba 1, 2... si abre otra cámara)."
+    )
+    parser.add_argument(
+        "--calib-a4",
+        type=float,
+        default=5.0,
+        help="Segundos iniciales con la boca cerrada para calibrar el umbral de bostezo (A4)."
+    )
+    parser.add_argument(
+        "--salida",
+        type=str,
+        default=None,
+        help="Carpeta donde guardar los indicadores de A4 (indicadores_a4.csv, resumen_a4.json)."
+    )
     args = parser.parse_args()
 
     if not MODEL_PATH.exists():
         print(f"[ERROR] No se encontró el modelo en: {MODEL_PATH}")
         return
 
-    fuente = args.video if args.video else 0
+    fuente = args.video if args.video else args.cam
     es_video = args.video is not None
     cap = cv2.VideoCapture(fuente)
 
@@ -178,7 +197,9 @@ def main():
         num_faces=1,
         min_face_detection_confidence=0.5,
         min_face_presence_confidence=0.5,
-        min_tracking_confidence=0.5
+        min_tracking_confidence=0.5,
+        output_face_blendshapes=True,                # A4: jawOpen
+        output_facial_transformation_matrixes=True   # A4: pose de la cabeza
     )
 
     print("[OK] Fuente iniciada correctamente.")
@@ -197,6 +218,9 @@ def main():
     duracion_cierre = 0.0
     contador_parpadeos = 0
     ojo_estaba_cerrado = False
+
+    # Estado A4 (Bostezos y mirada)
+    monitor_a4 = A4Monitor(calib_s=args.calib_a4, history_s=None if es_video else 120.0)
 
     with FaceLandmarker.create_from_options(options) as landmarker:
         while True:
@@ -225,6 +249,15 @@ def main():
             ultimo_timestamp = timestamp_ms
 
             resultado = landmarker.detect_for_video(mp_image, timestamp_ms)
+
+            # PROCESAMIENTO A4: BOSTEZOS Y MIRADA
+            pts_a4 = (landmarks_to_array(resultado.face_landmarks[0], ancho, alto)
+                      if resultado.face_landmarks else None)
+            estado_a4 = monitor_a4.update(
+                pts_a4, tiempo_actual_seg,
+                pose=pose_from_result(resultado),
+                blendshapes=blendshapes_to_dict(resultado)
+            )
 
             roi_ojo_izq = None
             roi_ojo_der = None
@@ -380,6 +413,7 @@ def main():
             pir_texto = f"{pir_suavizado:.2f}" if pir_suavizado is not None else "--"
             cv2.putText(frame, f"PIR: {pir_texto} | Parpadeos: {contador_parpadeos}", (15, 138), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 2)
             cv2.putText(frame, f"FPS: {fps_suavizado:.1f} | Res: {ancho}x{alto} | Pruebas A7: {contador_evidencias}/4", (15, 164), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+            monitor_a4.draw(frame, estado_a4, pts_a4, origin=(15, 196))
 
             cv2.imshow("Monitoreo Ocular y Pose 3D de Cabeza", frame)
 
@@ -414,6 +448,13 @@ def main():
 
     cap.release()
     cv2.destroyAllWindows()
+
+    resumen_a4 = monitor_a4.finish()
+    print(f"[A4] Bostezos: {len(resumen_a4['bostezos'])} | Ventanas con alerta: "
+          f"{resumen_a4['ventanas_con_alerta']}/{resumen_a4['ventanas']}")
+    if args.salida:
+        carpeta = monitor_a4.save(args.salida, resumen_a4)
+        print(f"[OK] Indicadores A4 guardados en: {carpeta}")
     print("[OK] Ejecución finalizada correctamente.")
 
 

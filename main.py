@@ -25,30 +25,17 @@ from head_pose import (
     obtener_puntos_pose_2d, estimar_pose_cabeza, dibujar_vector_pose, evaluar_estado_pose
 )
 from driver_state_classifier import ClasificadorEstadoConductor
+from a4 import A4Monitor, landmarks_to_array, blendshapes_to_dict, pose_from_result
 
 # ==============================================================================
 # PARÁMETROS CALIBRADOS
 # ==============================================================================
 UMBRAL_EAR_CERRADO = 0.18       # Ojo cerrado real (tolera entrecerrar ojos al sonreír)
-UMBRAL_MAR_BOSTEZO = 0.68       # Apertura bucal de bostezo (ignora sonrisas abiertas)
-FRAMES_MIN_BOSTEZO = 30         # Cuadros seguidos bostezando (~1.5 a 2 segundos)
+# El bostezo (MAR, umbral calibrado y duración mínima) lo calcula el módulo A4 (a4/boca.py)
 
 UMBRAL_PITCH_CABECEO = 18.0     # Cabeceo hacia adelante/abajo (en grados)
 UMBRAL_YAW_DISTRACCION = 32.0   # Giro lateral izquierda/derecha (en grados)
 UMBRAL_ROLL_LATERAL = 22.0      # Inclinación hacia los hombros (en grados)
-
-MOUTH_MAR_IDX = [78, 308, 82, 87, 13, 14, 312, 317]
-
-
-def calcular_mar(landmarks, ancho, alto):
-    pts = [np.array([landmarks[i].x * ancho, landmarks[i].y * alto], dtype=np.float32) for i in MOUTH_MAR_IDX]
-    horiz = np.linalg.norm(pts[0] - pts[1])
-    if horiz == 0:
-        return 0.0
-    v1 = np.linalg.norm(pts[2] - pts[3])
-    v2 = np.linalg.norm(pts[4] - pts[5])
-    v3 = np.linalg.norm(pts[6] - pts[7])
-    return float((v1 + v2 + v3) / (3.0 * horiz))
 
 
 def registrar_prueba_a7(carpeta, num_prueba, img_name, estado_global, ear, perclos, mar, pir, pitch, yaw):
@@ -78,13 +65,16 @@ def registrar_prueba_a7(carpeta, num_prueba, img_name, estado_global, ear, percl
 def main():
     parser = argparse.ArgumentParser(description="Sistema Integrado de Monitoreo en Cabina (TEL-328)")
     parser.add_argument("--video", type=str, default=None, help="Ruta a video de prueba (opcional)")
+    parser.add_argument("--cam", type=int, default=0, help="Índice de la cámara si no se usa --video (prueba 1, 2... si abre otra)")
+    parser.add_argument("--calib-a4", type=float, default=5.0, help="Segundos iniciales con la boca cerrada para calibrar el bostezo (A4)")
+    parser.add_argument("--salida", type=str, default=None, help="Carpeta donde guardar los indicadores de A4 al cerrar")
     args = parser.parse_args()
 
     if not MODEL_PATH.exists():
         print(f"[ERROR] No se encontró el modelo en: {MODEL_PATH}")
         return
 
-    fuente = args.video if args.video else 0
+    fuente = args.video if args.video else args.cam
     es_video = args.video is not None
     cap = cv2.VideoCapture(fuente)
 
@@ -103,17 +93,19 @@ def main():
         num_faces=1,
         min_face_detection_confidence=0.5,
         min_face_presence_confidence=0.5,
-        min_tracking_confidence=0.5
+        min_tracking_confidence=0.5,
+        output_face_blendshapes=True,                # A4: jawOpen
+        output_facial_transformation_matrixes=True   # A4: pose para descartar cuadros girados
     )
 
     historial_perclos = deque(maxlen=90)
     trayectoria_iris = deque(maxlen=30)
     clasificador_a6 = ClasificadorEstadoConductor(ventana_frames=45)
+    monitor_a4 = A4Monitor(calib_s=args.calib_a4, history_s=None if args.video else 120.0)
 
     inicio_cierre_ojos = None
     duracion_cierre = 0.0
     ojo_estaba_cerrado = False
-    frames_bostezo = 0
     bostezo_activo = False
     pir_suavizado = None
 
@@ -156,6 +148,11 @@ def main():
             ultimo_timestamp = timestamp_ms
 
             resultado = landmarker.detect_for_video(mp_image, timestamp_ms)
+
+            # A4: bostezos (MAR calibrado, validado en YawDD) y mirada (fijaciones/sacadas)
+            pts_a4 = landmarks_to_array(resultado.face_landmarks[0], ancho, alto) if resultado.face_landmarks else None
+            estado_a4 = monitor_a4.update(pts_a4, tiempo_seg, pose=pose_from_result(resultado),
+                                          blendshapes=blendshapes_to_dict(resultado))
 
             ear_promedio = 0.0
             perclos_actual = 0.0
@@ -200,14 +197,9 @@ def main():
                     duracion_cierre = 0.0
 
                 # 2. MAR e inestabilidad sacádica (A4)
-                mar_actual = calcular_mar(landmarks, ancho, alto)
-                if mar_actual > UMBRAL_MAR_BOSTEZO:
-                    frames_bostezo += 1
-                    if frames_bostezo >= FRAMES_MIN_BOSTEZO:
-                        bostezo_activo = True
-                else:
-                    frames_bostezo = 0
-                    bostezo_activo = False
+                # el bostezo lo decide el módulo A4 (umbral calibrado por persona + duración mínima)
+                mar_actual = estado_a4.mar_suav
+                bostezo_activo = estado_a4.bostezando
 
                 if iris_izq_pts and len(ojo_izq) >= 9:
                     p_iris = np.array(iris_izq_pts[0], dtype=np.float32)
@@ -318,10 +310,24 @@ def main():
                 (f"Riesgo Fatiga: {score_f:.0f}% | Ocular: {score_s:.0f}%", (180, 255, 180)),
             ]
 
+            # Líneas de A4: estado/alertas y resumen de bostezos y mirada
+            ind_a4 = estado_a4.indicadores or {}
+            fmt_a4 = lambda v, f: "--" if v is None or v != v else f.format(v)  # v != v -> NaN
+            if estado_a4.calibrando_s > 0:
+                txt_a4, col_a4 = f"A4: calibrando, boca cerrada {estado_a4.calibrando_s:.0f}s", (255, 255, 0)
+            else:
+                txt_a4 = "A4: " + (" | ".join(estado_a4.alertas) if estado_a4.alertas else "NORMAL")
+                col_a4 = [(0, 255, 0), (0, 165, 255), (0, 0, 255)][estado_a4.nivel]
+            lineas_info += [
+                (txt_a4, col_a4),
+                (f"Bostezos 15min: {ind_a4.get('bostezos_15min', 0)} | Fij {fmt_a4(ind_a4.get('fijacion_actual_s'), '{:.1f}')}s"
+                 f" | Sac {fmt_a4(ind_a4.get('sacadas_por_s'), '{:.2f}')}/s", (255, 255, 255)),
+            ]
+
             y_pos = 135
             for texto, col in lineas_info:
                 cv2.putText(panel, texto, (15, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.47, col, 1)
-                y_pos += 28
+                y_pos += 24
 
             cv2.line(panel, (15, alto - 95), (ancho_panel - 15, alto - 95), (70, 70, 70), 1)
             cv2.putText(panel, f"FPS: {fps_suavizado:.1f} | Pruebas A7: {contador_evidencias}/4", (15, alto - 68), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 255, 200), 1)
@@ -351,6 +357,12 @@ def main():
 
     cap.release()
     cv2.destroyAllWindows()
+
+    resumen_a4 = monitor_a4.finish()
+    print(f"[A4] Bostezos: {len(resumen_a4['bostezos'])} | Ventanas con alerta: "
+          f"{resumen_a4['ventanas_con_alerta']}/{resumen_a4['ventanas']}")
+    if args.salida:
+        print(f"[OK] Indicadores A4 guardados en: {monitor_a4.save(args.salida, resumen_a4)}")
 
 
 if __name__ == "__main__":
