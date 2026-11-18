@@ -1,4 +1,5 @@
 import argparse
+import csv
 import cv2
 import mediapipe as mp
 import time
@@ -10,6 +11,14 @@ from pupil_segmentation import (
     calcular_ear,
     calcular_diametro_iris,
     calcular_pir
+)
+from head_pose import (
+    PITCH_UMBRAL_CABECEO,
+    YAW_UMBRAL_DISTRACCION,
+    obtener_puntos_pose_2d,
+    estimar_pose_cabeza,
+    dibujar_vector_pose,
+    evaluar_estado_pose
 )
 
 
@@ -103,9 +112,41 @@ def dibujar_caja(frame, caja, color, texto):
     )
 
 
+def registrar_evidencia_a7(carpeta_evidencias, num_prueba, nombre_img, pitch, yaw, roll, ear, pir, estado_pose, estado_ocular):
+    archivo_csv = carpeta_evidencias / "registro_pruebas_a7.csv"
+    existe = archivo_csv.exists()
+    with open(archivo_csv, mode="a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if not existe:
+            writer.writerow([
+                "Prueba",
+                "Timestamp",
+                "Pitch_deg",
+                "Yaw_deg",
+                "Roll_deg",
+                "EAR",
+                "PIR",
+                "Estado_Pose",
+                "Estado_Ocular",
+                "Imagen"
+            ])
+        writer.writerow([
+            num_prueba,
+            time.strftime("%Y-%m-%d %H:%M:%S"),
+            f"{pitch:.2f}" if pitch is not None else "",
+            f"{yaw:.2f}" if yaw is not None else "",
+            f"{roll:.2f}" if roll is not None else "",
+            f"{ear:.2f}",
+            f"{pir:.2f}" if pir is not None else "",
+            estado_pose,
+            estado_ocular,
+            nombre_img.name
+        ])
+
+
 # PROGRAMA PRINCIPAL
 def main():
-    parser = argparse.ArgumentParser(description="Análisis ocular y dinámica pupilar")
+    parser = argparse.ArgumentParser(description="Análisis ocular, dinámica pupilar y pose 3D de cabeza")
     parser.add_argument(
         "--video",
         type=str,
@@ -141,12 +182,15 @@ def main():
     )
 
     print("[OK] Fuente iniciada correctamente.")
-    print("[OK] MediaPipe Face Landmarker iniciado.")
-    print("Controles: Q = cerrar | S = guardar captura")
+    print("[OK] MediaPipe Face Landmarker + Modulo Head Pose 3D iniciados.")
+    print(f"[INFO] Umbrales A7 -> Cabeceo: Pitch > {PITCH_UMBRAL_CABECEO:.0f} deg | Distraccion: |Yaw| > {YAW_UMBRAL_DISTRACCION:.0f} deg")
+    print("Controles: Q = cerrar | S = guardar captura y registrar prueba de validacion")
 
     tiempo_anterior = time.time()
     fps_suavizado = 0.0
     ultimo_timestamp = 0
+    pir_suavizado = None
+    contador_evidencias = 0
 
     # Variables de estado A3 (Fatiga ocular)
     inicio_cierre_ojos = None
@@ -156,7 +200,6 @@ def main():
 
     with FaceLandmarker.create_from_options(options) as landmarker:
         while True:
-            pir_suavizado = None
             ret, frame = cap.read()
             if not ret:
                 print("[INFO] Fin del video o error de captura.")
@@ -191,9 +234,12 @@ def main():
             iris_der_pts = []
 
             ear_promedio = 0.0
-            pir_promedio = None
             estado_alerta = "NORMAL"
             color_estado = (0, 255, 0)
+
+            pitch, yaw, roll = None, None, None
+            estado_pose = "SIN ROSTRO"
+            color_pose = (0, 0, 255)
 
             if resultado.face_landmarks:
                 landmarks = resultado.face_landmarks[0]
@@ -211,7 +257,7 @@ def main():
                 ear_der = calcular_ear(ear_der_pts)
                 ear_promedio = (ear_izq + ear_der) / 2.0
 
-                # Lógica de parpadeo prolongado  (3.0 s)
+                # Lógica de parpadeo prolongado (3.0 s)
                 if ear_promedio < EAR_UMBRAL:
                     if not ojo_estaba_cerrado:
                         ojo_estaba_cerrado = True
@@ -219,7 +265,7 @@ def main():
                     duracion_cierre = tiempo_actual_seg - inicio_cierre_ojos
 
                     if duracion_cierre >= TIEMPO_MICROSUEÑO_SEG:
-                        estado_alerta = "ALERTA: MICROSUEÑO"
+                        estado_alerta = "ALERTA: MICROSUENO"
                         color_estado = (0, 0, 255)
                     else:
                         estado_alerta = "OJO CERRADO"
@@ -231,7 +277,20 @@ def main():
                     inicio_cierre_ojos = None
                     duracion_cierre = 0.0
 
-                # Dibujar regiones
+                # PROCESAMIENTO A7: POSE E INCLINACIÓN DE LA CABEZA 3D
+                puntos_pose_2d = obtener_puntos_pose_2d(landmarks, ancho, alto)
+                angulos_pose, vector_nariz, _ = estimar_pose_cabeza(puntos_pose_2d, ancho, alto)
+                if angulos_pose is not None and vector_nariz is not None:
+                    pitch, yaw, roll = angulos_pose
+                    estado_pose, color_pose = evaluar_estado_pose(pitch, yaw, roll)
+                    dibujar_vector_pose(
+                        frame,
+                        vector_nariz[0],
+                        vector_nariz[1],
+                        puntos_2d=puntos_pose_2d
+                    )
+
+                # Dibujar regiones faciales
                 dibujar_contorno(frame, ojo_izquierdo, (255, 0, 0))
                 dibujar_contorno(frame, ojo_derecho, (255, 0, 0))
                 dibujar_puntos(frame, iris_izq_pts, (0, 255, 255), 2)
@@ -294,13 +353,11 @@ def main():
 
             if pir_valores:
                 pir_promedio = sum(pir_valores) / len(pir_valores)
-                if pir_valores:
-                    pir_promedio = sum(pir_valores) / len(pir_valores)
-                    if pir_suavizado is None:
-                        pir_suavizado = pir_promedio
-                    else:
-                        pir_suavizado = 0.8 * pir_suavizado + 0.2 * pir_promedio
-                        
+                if pir_suavizado is None:
+                    pir_suavizado = pir_promedio
+                else:
+                    pir_suavizado = 0.8 * pir_suavizado + 0.2 * pir_promedio
+
             # FPS
             tiempo_fps = time.time()
             diferencia = tiempo_fps - tiempo_anterior
@@ -310,23 +367,50 @@ def main():
                 fps_suavizado = fps_actual if fps_suavizado == 0 else (0.9 * fps_suavizado + 0.1 * fps_actual)
 
             # MÉTRICAS EN VENTANA PRINCIPAL
-            cv2.putText(frame, f"Estado: {estado_alerta}", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_estado, 2)
-            cv2.putText(frame, f"EAR: {ear_promedio:.2f} (Cierre: {duracion_cierre:.1f}s)", (15, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            pir_texto = f"{pir_suavizado:.2f}" if pir_suavizado is not None else "--"
-            cv2.putText(frame, f"PIR: {pir_texto} | Parpadeos: {contador_parpadeos}", (15, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(frame, f"FPS: {fps_suavizado:.1f} | Res: {ancho}x{alto}", (15, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
+            cv2.putText(frame, f"Ocular: {estado_alerta}", (15, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color_estado, 2)
+            cv2.putText(frame, f"Pose 3D: {estado_pose}", (15, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color_pose, 2)
 
-            cv2.imshow("Analisis Ocular y Pupilar", frame)
+            if pitch is not None and yaw is not None and roll is not None:
+                texto_pose = f"Pitch: {pitch:+.1f} deg | Yaw: {yaw:+.1f} deg | Roll: {roll:+.1f} deg"
+            else:
+                texto_pose = "Pitch: -- | Yaw: -- | Roll: --"
+            cv2.putText(frame, texto_pose, (15, 84), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 0), 2)
+
+            cv2.putText(frame, f"EAR: {ear_promedio:.2f} (Cierre: {duracion_cierre:.1f}s)", (15, 112), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 2)
+            pir_texto = f"{pir_suavizado:.2f}" if pir_suavizado is not None else "--"
+            cv2.putText(frame, f"PIR: {pir_texto} | Parpadeos: {contador_parpadeos}", (15, 138), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 2)
+            cv2.putText(frame, f"FPS: {fps_suavizado:.1f} | Res: {ancho}x{alto} | Pruebas A7: {contador_evidencias}/4", (15, 164), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+
+            cv2.imshow("Monitoreo Ocular y Pose 3D de Cabeza", frame)
 
             tecla = cv2.waitKey(1) & 0xFF
             if tecla == ord("q"):
                 break
             if tecla == ord("s"):
+                contador_evidencias += 1
                 carpeta_evidencias = BASE_DIR / "evidencias"
                 carpeta_evidencias.mkdir(exist_ok=True)
-                nombre = carpeta_evidencias / f"a3_{int(time.time())}.jpg"
+                nombre = carpeta_evidencias / f"a7_prueba{contador_evidencias}_{int(time.time())}.jpg"
                 cv2.imwrite(str(nombre), frame)
-                print(f"[OK] Evidencia guardada: {nombre}")
+                registrar_evidencia_a7(
+                    carpeta_evidencias,
+                    contador_evidencias,
+                    nombre,
+                    pitch,
+                    yaw,
+                    roll,
+                    ear_promedio,
+                    pir_suavizado,
+                    estado_pose,
+                    estado_alerta
+                )
+                p_str = f"{pitch:+.1f}°" if pitch is not None else "--"
+                y_str = f"{yaw:+.1f}°" if yaw is not None else "--"
+                r_str = f"{roll:+.1f}°" if roll is not None else "--"
+                print(
+                    f"[OK] Prueba #{contador_evidencias} guardada: {nombre.name} | "
+                    f"Pitch={p_str}, Yaw={y_str}, Roll={r_str} | Estado={estado_pose}"
+                )
 
     cap.release()
     cv2.destroyAllWindows()
