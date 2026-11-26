@@ -54,4 +54,4 @@ python a4_pruebas.py
 python a4_protocolo.py --persona Nombre --out protocolo/
 ```
 
-Para esta entrega final, la bitacora 2 se puede encontrar en el siguiente enlace del repositorio [abrir el documento PDF](bitacora2.pdf).
+Para esta entrega final, la bitacora 2 se puede encontrar en el siguiente enlace del repositorio [abrir el documento PDF](Bitacora2.pdf).
