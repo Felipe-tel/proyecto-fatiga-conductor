@@ -53,3 +53,5 @@ python a4_pruebas.py
 # Protocolo guiado de validación (estímulo en pantalla, métricas por tramo)
 python a4_protocolo.py --persona Nombre --out protocolo/
 ```
+
+Para esta entrega final, la bitacora 2 se puede encontrar en el siguiente enlace del repositorio
